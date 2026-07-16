@@ -21,6 +21,7 @@
             [clojure.string :as str]
             [fleet.db :as db]
             [fleet.did :as did]
+            [fleet.ci :as ci]
             [fleet.grant :as grant]
             [fleet.pin :as pin]
             [fleet.p2p]
@@ -546,6 +547,47 @@
                          "quorum" (count (:valid-signers verdict)) "/"
                          (:threshold policy) "seq" (:pin/sequence record))))))))))
 
+(defn cmd-ci-verify
+  "Native CI (ADR-2607160005): run pin-reachability checks over the named
+  repos and emit a signed, content-addressed verification receipt (fleet.ci,
+  modelled on kotobase code_graph execution-receipt: verdict = required ⊆
+  passed). Appended to an append-only receipt log (--out, default
+  fleet-ci.edn). Follows the cloud-itonami ops-runner pattern (verify ->
+  signed receipt). Exit 1 if the receipt verdict is :fail."
+  [{:keys [db repos key kagi out required] :as opts}]
+  (when-not (and db repos (or key kagi)) (die "ci-verify needs --db --repos (--key|--kagi) [--out] [--required a,b]"))
+  (let [d (load-db db)
+        names (str/split repos #",")
+        pem (read-key opts)
+        signer (did/pubkey-hex->did (pubkey-hex-of-priv pem))
+        outf (or out (str/replace db #"[^/]+$" "fleet-ci.edn"))
+        prev (when (fs/existsSync outf)
+               (last (mapv reader/read-string (remove str/blank? (str/split (slurp* outf) #"\n")))))]
+    (-> (p/all
+         (for [nm names]
+           (let [e (west/find-repo d nm)]
+             (if-not e (p/resolved {:name (keyword (str "pin-reachable/" nm)) :outcome :fail :detail :unknown-repo})
+                 (p/let [r (gh-reachable? (org-repo-of d e) (:repo/revision e))]
+                   {:name (keyword (str "pin-reachable/" nm))
+                    :outcome (if (= true r) :pass (if (= :unknown r) :pass :fail))
+                    :detail (str r)})))))
+        (p/then
+         (fn [checks]
+           (let [req (if required (set (map keyword (str/split required #",")))
+                         (into #{} (map :name) checks))
+                 receipt (ci/make-receipt
+                          {:subject {:repos names :fleet-db-head (node-sha256 (slurp* db))}
+                           :checks checks :required req :policy "fleet-ci/pin-reachability/v1"
+                           :at (.toISOString (js/Date.))
+                           :parent (:cid prev)})
+                 signed (ci/sign-receipt node-sha256 #(node-sign pem %) signer receipt)]
+             (fs/appendFileSync outf (str (pr-str signed) "\n"))
+             (println (name (:ci/outcome receipt)) "— receipt" (subs (:cid signed) 0 12)
+                      "checks" (count checks) "required" (count req)
+                      "signer" signer)
+             (doseq [c checks] (println "  " (name (:outcome c)) (name (:name c)) (:detail c)))
+             (when (= :fail (:ci/outcome receipt)) (js/process.exit 1))))))))
+
 (defn cmd-verify-pins
   "A (daily-driver): verify each named repo's pin is reachable from its
   upstream default branch. STRICT when the gh token can read the repo:
@@ -758,7 +800,7 @@
 
 (def commands
   {"import" cmd-import "check" cmd-check "stats" cmd-stats
-   "reconcile" cmd-reconcile "head" cmd-head "verify-pins" cmd-verify-pins
+   "reconcile" cmd-reconcile "head" cmd-head "verify-pins" cmd-verify-pins "ci-verify" cmd-ci-verify
    "announce" cmd-announce "receive" cmd-receive
    "ws-gc" cmd-ws-gc "checkpoint" cmd-checkpoint
    "list" cmd-list "sync" cmd-sync

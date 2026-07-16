@@ -5,6 +5,7 @@
             [fleet.did :as did]
             [fleet.grant :as grant]
             [fleet.p2p]
+            [fleet.ci]
             [fleet.pin :as pin]
             [fleet.sync :as sync]
             [fleet.ws :as ws]
@@ -396,3 +397,26 @@
       (is (= ["annexed"] (map :name (:changed (db/scope-diff full d1 #{"gftdcojp"}))))))
     (testing "scoped to an untouched org: no in-scope drift (would not reject)"
       (is (not (db/drift? (db/scope-diff full d1 #{"etzhayyim"})))))))
+
+(deftest ci-receipt
+  (let [h #(str "H" (hash %))
+        sign (fn [payload] (str "S:" payload))
+        vfy (fn [pub payload sig] (= sig (str "S:" payload)))
+        checks [{:name :pin-reachable/a :outcome :pass}
+                {:name :pin-reachable/b :outcome :pass}]
+        req #{:pin-reachable/a :pin-reachable/b}
+        r (fleet.ci/make-receipt {:subject {:repos ["a" "b"]} :checks checks
+                                  :required req :policy "p" :at "t"})
+        signed (fleet.ci/sign-receipt h sign "did:key:zA" r)]
+    (testing "verdict pass iff required subset passed"
+      (is (= :pass (:ci/outcome r)))
+      (is (= :fail (:ci/outcome (fleet.ci/make-receipt
+                                 {:subject {} :checks [{:name :x :outcome :fail}]
+                                  :required #{:x} :at "t"})))))
+    (testing "signed receipt verifies; tamper + inconsistent-outcome rejected"
+      (is (:ok? (fleet.ci/verify-receipt h vfy signed "pkA")))
+      (is (some #{:cid-mismatch}
+                (:reasons (fleet.ci/verify-receipt h vfy (assoc signed :cid "H0") "pkA"))))
+      (let [lie (assoc-in signed [:receipt :ci/outcome] :pass)
+            lie (assoc-in lie [:receipt :ci/checks] [{:name :pin-reachable/a :outcome :fail}])]
+        (is (not (:ok? (fleet.ci/verify-receipt h vfy lie "pkA"))))))))
