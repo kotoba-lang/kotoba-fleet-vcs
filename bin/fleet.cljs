@@ -53,6 +53,24 @@
 (defn spit* [f s] (fs/writeFileSync f s))
 (defn load-db [f] (reader/read-string (slurp* f)))
 
+(defn lock-db!
+  "Mutual exclusion for db+ledger+head mutations across concurrent agent
+  sessions (fixes last-writer-wins). mkdir is the atomic primitive; stale
+  locks (>60s — a fleet command never legitimately holds one that long)
+  are broken. Released on process exit."
+  [dbf]
+  (let [lock (str dbf ".lock")]
+    (loop [i 0]
+      (let [ok (try (fs/mkdirSync lock) true (catch :default _ false))]
+        (cond
+          ok (.on js/process "exit" (fn [] (try (fs/rmdirSync lock) (catch :default _))))
+          (> i 40)
+          (let [age (- (js/Date.now) (.-mtimeMs (fs/statSync lock)))]
+            (if (> age 60000)
+              (do (try (fs/rmdirSync lock) (catch :default _)) (recur 0))
+              (die (str "fleet-db is locked by another session (" lock ")"))))
+          :else (do (cp/execSync "sleep 0.25") (recur (inc i))))))))
+
 (defn sh
   "Run argv, resolve {:ok? bool :out str :err str}. Never rejects."
   [[cmd & args]]
@@ -259,6 +277,7 @@
   [{:keys [db repo new key keys west] :as opts}]
   (when-not (and db repo new key keys)
     (die "pin-advance needs --db --repo --new --key <privkey.pem> --keys <fleet-keys.edn>"))
+  (lock-db! db)
   (let [d       (load-db db)
         entity  (or (west/find-repo d repo) (die (str "unknown repo " repo)))
         keyring (reader/read-string (slurp* keys))
@@ -312,6 +331,7 @@
 
 (defn cmd-pin-advance [{:keys [db repo new actor]}]
   (when-not (and db repo new) (die "pin-advance needs --db --repo --new"))
+  (lock-db! db)
   (let [dbf    db
         d      (load-db dbf)
         entity (or (west/find-repo d repo) (die (str "unknown repo " repo)))
@@ -395,6 +415,7 @@
   [{:keys [db keys repo branch gov-keys west]}]
   (when-not (and db keys repo branch gov-keys)
     (die "govern needs --db --keys --repo --branch --gov-keys k1.pem,k2.pem [--west]"))
+  (lock-db! db)
   (let [d       (load-db db)
         entity  (or (west/find-repo d repo) (die (str "unknown repo " repo)))
         cfg     (reader/read-string (slurp* keys))
@@ -531,6 +552,7 @@
   fleet-db as attributed ledger events. --check: exit 1 on drift, write nothing."
   [{:keys [db west check]}]
   (when-not (and db west) (die "reconcile needs --db --west [--check]"))
+  (when-not check (lock-db! db))
   (let [d-old (load-db db)
         d-new (west/parse (slurp* west))
         diff  (db/diff-dbs d-old d-new)]
