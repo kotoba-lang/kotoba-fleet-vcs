@@ -69,6 +69,21 @@ nbb --classpath src:test run-tests.cljs
   quorum / sequence / parent / reachability / value-advance）。
 - 残: workspace manager（GC / checkpoint / best-of-N）と鍵の 1Password 移設。
 
+## native CI（execution-receipt 型、ADR-2607160005）
+
+- `fleet.ci`: fleet の pin 検証を **content-addressed・署名付き verification
+  receipt** にする。kotobase code_graph の `put-execution-receipt!` と同型
+  （verdict = **required ⊆ passed**、あちらの required-effects ⊆ granted-effects
+  に対応）。cloud-itonami ops-runner パターン（verify → 署名 receipt、
+  ADR-2607141700）の fleet 版。GitHub Actions の揮発ログを durable な
+  attestation に置換。
+- `fleet ci-verify --db --repos a,b --kagi <name> [--required a,b]`: pin 到達性
+  チェックを走らせ署名 receipt を append-only ログに記録、verdict :fail で
+  exit 1。receipt は IStore stream（`fleet/ci-receipts`）にも載せられる
+  （delta.store と同じ substrate）。private repo も owner 認証で検証済み。
+- 残: kototama capability-sandbox での hinshitsu ゲート実行（現状は pin 到達性
+  チェックのみ。hinshitsu evidence schema と互換の {:name :outcome} 形）。
+
 ## 日常ドライバ化（reverse-topo: C→B→A→D）
 
 - **C — live query backend**: `bin/query.cljs`（実 datom plane に任意 Datalog +
