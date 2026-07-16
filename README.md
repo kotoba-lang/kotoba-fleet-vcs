@@ -90,6 +90,16 @@ name+rev set 完全一致、`verify-chain` OK。block store 本体は production
 B2/R2（DataLad/B2 経路）。EDN の fleet-db は作業/cache 形として残り、chain が
 durable な backing になる。
 
+## governor 統合（既存 ops-runner と相互運用、ADR-2607141700）
+
+fleet の quorum land-back（propose→govern→canonical 前進）を、cloud-itonami
+ops-runner の audit ledger 形式に写す `fleet.governor-bridge/land->ops-receipt`。
+**実測: fleet の land-back outcome を ops-runner receipt にすると、本物の
+cloud-itonami.ops-runner/sign-receipt + verify-receipt が nbb 上で TRUE 検証、
+status 改竄は reject**。2つの governance ループ（fleet quorum / ops-runner
+verify→handler→receipt）が同型の署名 receipt で合流。ops-runner を hard
+require せず plain-map receipt shape で疎結合（VCS-stack decoupling と同原則）。
+
 ## CACAO 完全整合（本物の CAIP-122、ADR-2607160005）
 
 **cacao.core（org-chainagnostic-cacao）は既に portable .cljc で nbb 完動**
