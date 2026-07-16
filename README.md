@@ -1,4 +1,6 @@
-# kotoba-fleet-vcs
+# kagami
+
+*(旧 kotoba-fleet-vcs — 2026-07-16 rename。fleet-db を映す鏡＝projection の含意)*
 
 west 後継の AI-agent フリート向け VCS レイヤ（ADR-2607160005）。この repo は
 **Phase 0 — 読み取りモデル**: `manifest/west.yml`（生成物）を fleet-db（EDN の
