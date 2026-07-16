@@ -75,13 +75,18 @@
              :hash-fn     (fn [s] -> hex)
              :reachable?  true | false | :unknown  — server-side judgment,
                           computed by the caller (GitHub API), never local
-                          shallow ancestry}
+                          shallow ancestry
+             :value-advance? true | false | :unknown — is :pin/value ahead of
+                          the current record's value (verify-west-pins Rule 2:
+                          behind = silent pin regression, diverged = wrong
+                          lineage; both reject). true when there is no current.}
 
   -> {:verdict :accept | :warn-accept | :reject, :reasons [kw ...]}
   Fail-open only on unverifiable reachability (matching verify-west-pins);
   every other failure rejects."
   [{:keys [record signature signer] :as _proposal}
-   {:keys [repo-path current keyring verify-fn hash-fn reachable?]}]
+   {:keys [repo-path current keyring verify-fn hash-fn reachable? value-advance?]
+    :or {value-advance? true}}]
   (let [pubkey  (when (and signer (str/starts-with? signer "ed25519:"))
                   (subs signer (count "ed25519:")))
         cur-rec (:record current)
@@ -111,12 +116,18 @@
           (conj :genesis-has-parent)
 
           (false? reachable?)
-          (conj :unreachable-from-upstream-default-branch))]
+          (conj :unreachable-from-upstream-default-branch)
+
+          (and cur-rec (false? value-advance?))
+          (conj :value-regression))]
     (cond
-      (seq reasons)          {:verdict :reject :reasons reasons}
-      (= :unknown reachable?) {:verdict :warn-accept
-                               :reasons [:reachability-unverifiable-fail-open]}
-      :else                  {:verdict :accept :reasons []})))
+      (seq reasons) {:verdict :reject :reasons reasons}
+      (or (= :unknown reachable?) (= :unknown value-advance?))
+      {:verdict :warn-accept
+       :reasons (cond-> []
+                  (= :unknown reachable?) (conj :reachability-unverifiable-fail-open)
+                  (= :unknown value-advance?) (conj :value-advance-unverifiable-fail-open))}
+      :else {:verdict :accept :reasons []})))
 
 (defn accepted-event
   "Ledger event for an accepted (or warn-accepted) signed pin advance."

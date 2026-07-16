@@ -217,6 +217,19 @@
       :unknown
       (contains? #{"identical" "behind"} (str/trim (:out r))))))
 
+(defn gh-value-advance?
+  "verify-west-pins Rule 2, server-side: old..new must be ahead.
+  behind = silent regression, diverged = wrong lineage -> false.
+  No old value -> true; API failure -> :unknown (fail-open)."
+  [org-repo old-sha new-sha]
+  (if-not old-sha
+    (p/resolved true)
+    (p/let [r (sh ["gh" "api" (str "repos/" org-repo "/compare/" old-sha "..." new-sha)
+                   "--jq" ".status"])]
+      (if-not (:ok? r)
+        :unknown
+        (= "ahead" (str/trim (:out r)))))))
+
 (defn org-repo-of [d entity]
   (let [base (some #(when (= (:remote/name %) (:repo/remote entity)) (:remote/url-base %))
                    (:fleet/remotes d))
@@ -257,7 +270,9 @@
                             (pin/record-hash node-sha256 (:record current)
                                              (:signature current)))})
         sig     (node-sign pem (pin/canonical-str record))]
-    (p/let [reach (gh-reachable? (org-repo-of d entity) new)]
+    (p/let [orl   (p/resolved (org-repo-of d entity))
+            reach (gh-reachable? orl new)
+            vadv  (gh-value-advance? orl (get-in current [:record :pin/value]) new)]
       (let [proposal {:record record :signature sig :signer signer}
             verdict  (pin/admit proposal
                                 {:repo-path (:repo/path entity)
@@ -265,7 +280,8 @@
                                  :keyring keyring
                                  :verify-fn node-verify
                                  :hash-fn node-sha256
-                                 :reachable? reach})]
+                                 :reachable? reach
+                                 :value-advance? vadv})]
         (if (= :reject (:verdict verdict))
           (do (js/console.error "REJECTED:" (pr-str (:reasons verdict)))
               (js/process.exit 1))

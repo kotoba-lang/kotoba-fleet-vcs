@@ -184,3 +184,18 @@
       (is (pin/authorized? keyring "ed25519:agentA" "orgs/kotoba-lang/anything"))
       (is (not (pin/authorized? keyring "ed25519:agentA" "orgs/gftdcojp/x")))
       (is (pin/authorized? keyring "ed25519:agentB" "orgs/gftdcojp/one-repo")))))
+
+(deftest pin-value-regression
+  (let [genesis (pin/make-record {:repo "plain" :value "new" :sequence 1 :parent nil})
+        g-prop  (proposal "agentA" genesis)
+        g-cur   {:record genesis :signature (:signature g-prop)}
+        back    (pin/make-record {:repo "plain" :value "old" :sequence 2
+                                  :parent (pin/record-hash fake-hash genesis (:signature g-prop))})]
+    (testing "value regression rejected even with valid signature + advancing sequence"
+      (is (= {:verdict :reject :reasons [:value-regression]}
+             (pin/admit (proposal "agentA" back) (ctx g-cur :value-advance? false)))))
+    (testing "unverifiable value-advance warn-accepts (fail-open, like Rule 2 repair path)"
+      (is (= :warn-accept
+             (:verdict (pin/admit (proposal "agentA" back) (ctx g-cur :value-advance? :unknown))))))
+    (testing "genesis ignores value-advance"
+      (is (= :accept (:verdict (pin/admit g-prop (ctx nil :value-advance? true))))))))
