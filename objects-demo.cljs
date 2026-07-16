@@ -1,0 +1,50 @@
+#!/usr/bin/env nbb
+;; ⑰ object-plane block transfer demo: incremental git-fetch between machines.
+(ns objects-demo
+  (:require [kotoba-git.object :as obj]
+            [kotoba-git.log :as glog]
+            [kotoba-git.repo :as repo]
+            [fleet.objects :as fo]))
+
+(defn blob [db s] (obj/write-blob db (js/Buffer.from s "utf8")))
+(def fails (atom 0))
+(defn ok [b label] (if b (println "  OK  " label) (do (swap! fails inc) (println "  FAIL" label))))
+
+;; Machine A builds head_old (v1), then head_new (v2 adds a file).
+(let [[d1 b1]  (blob (repo/empty-repo) "ns a v1")
+      [d2 t1]  (obj/write-tree d1 [{:name "a.txt" :cid b1 :kind :blob}])
+      [d3 cOld](obj/write-commit d2 {:tree t1 :parents [] :author "A" :message "v1" :ts 1})
+      [d4 b2]  (blob d3 "ns b v2")
+      [d5 t2]  (obj/write-tree d4 [{:name "a.txt" :cid b1 :kind :blob}
+                                   {:name "b.txt" :cid b2 :kind :blob}])
+      [dA cNew](obj/write-commit d5 {:tree t2 :parents [cOld] :author "A" :message "v2" :ts 2})]
+
+  (println "⑰ object-plane block transfer (incremental fetch A -> B)")
+
+  ;; Machine B already fully holds head_old (v1).
+  (let [[dB _] (-> (repo/empty-repo) (blob "ns a v1"))
+        [dB2 _] (obj/write-tree dB [{:name "a.txt" :cid b1 :kind :blob}])
+        [dB3 _] (obj/write-commit dB2 {:tree t1 :parents [] :author "A" :message "v1" :ts 1})
+        haveB (fo/have-set dB3 cOld)
+        ;; A packs only the delta B lacks to reach cNew
+        bundle (fo/pack dA cNew haveB)]
+    (ok (not (fo/reconstructable? dB3 cNew)) "B cannot reconstruct v2 before fetch")
+    (println "  B has" (count haveB) "objects of v1; delta bundle =" (count bundle)
+             "objects" (mapv :kind bundle))
+    (ok (= 3 (count bundle)) "only the delta moves (new blob + new tree + new commit, NOT v1's blob)")
+
+    ;; B unpacks the delta
+    (let [[dB' applied] (fo/unpack dB3 bundle)]
+      (ok (fo/reconstructable? dB' cNew) "B CAN reconstruct v2 after fetching the delta")
+      (ok (= "ns b v2" (.toString (obj/read-blob dB' b2) "utf8")) "B can read the new file's content")
+      (ok (= 3 (count applied)) "applied the 3 delta objects")
+
+      ;; forged block: advertise a real CID but ship different bytes
+      (let [forged (assoc (first (filter #(= :blob (:kind %)) bundle))
+                          :bytes (js/Buffer.from "evil" "utf8"))]
+        (ok (try (fo/unpack dB3 [forged]) false
+                 (catch :default e (re-find #"cid mismatch" (str e))))
+            "forged block (wrong bytes under claimed CID) rejected"))))
+
+  (println (if (zero? @fails) "\nALL GREEN" "\nFAILURES"))
+  (when (pos? @fails) (js/process.exit 1)))

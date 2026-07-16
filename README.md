@@ -92,6 +92,19 @@ nbb --classpath src:test run-tests.cljs
   push するため per-agent 区別は原理的に不可 — 署名レイヤの per-agent auth が
   hard flip の前提。実 flip（legacy 書き込み拒否）は全 session enroll 後。
 
+## ⑰ object-plane block transfer (kotoba-git)
+
+- `fleet.objects`: P3b の head-cid gossip に **実 object graph 転送**を追加。
+  `pack db head-cid have` が `kotoba-git.log/missing-since`（プル
+  ネゴシエーション primitive）で受信側が欠く object だけを算出、`unpack` が
+  受信側 db に書き戻す（content-addressed なので CID 検証付き・冪等）。
+- demo（`objects-demo.cljs`）: 増分 fetch A→B — B は v1 の 3 objects を保持、
+  A は delta 3 objects（新 blob+tree+commit、v1 の blob は送らない）だけ送信、
+  **B は v2 を再構成でき新ファイルを読める**、forged block（CID 詐称）は
+  `cid mismatch` で REJECT。git-fetch の「delta だけ動く」を content-address で。
+- classpath: `kotoba-git/src` + arrangement/prolly-tree/io-ipld/
+  io-multiformats/org-ietf-cbor（全 pure cljc）。
+
 ## Phase 3b — fleet head gossip (p2p)
 
 - `fleet announce --head fleet-head.edn` — P3a signed head を
