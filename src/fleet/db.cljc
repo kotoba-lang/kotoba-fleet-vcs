@@ -88,3 +88,51 @@
                        (assoc % :repo/revision new-rev)
                        %)
                     repos)))))
+
+;; ---------------------------------------------------------------------------
+;; Phase 1.5: reconcile (absorb legacy west.yml writes into fleet-db)
+
+(defn diff-dbs
+  "Projection drift between fleet-db and a freshly parsed west.yml.
+  -> {:changed [{:name .. :old rev :new rev}] :added [entity ..]
+      :removed [name ..] :meta-changed? bool}
+  :meta-changed? = header/footer/remotes or non-revision entity fields differ."
+  [db-old db-new]
+  (let [by-name (fn [d] (into {} (map (juxt :repo/name identity)) (:fleet/repos d)))
+        o (by-name db-old) n (by-name db-new)
+        names-o (set (keys o)) names-n (set (keys n))
+        common (filter #(contains? n %) (map :repo/name (:fleet/repos db-old)))]
+    {:changed (into []
+                    (keep (fn [nm]
+                            (let [ro (o nm) rn (n nm)]
+                              (when (not= (:repo/revision ro) (:repo/revision rn))
+                                {:name nm :old (:repo/revision ro) :new (:repo/revision rn)}))))
+                    common)
+     :added   (into [] (keep #(when-not (contains? o (:repo/name %)) %)) (:fleet/repos db-new))
+     :removed (into [] (remove names-n) (sort names-o))
+     :meta-changed?
+     (or (not= (:fleet/header db-old) (:fleet/header db-new))
+         (not= (:fleet/footer db-old) (:fleet/footer db-new))
+         (some (fn [nm] (not= (dissoc (o nm) :repo/revision)
+                              (dissoc (n nm) :repo/revision)))
+               common))}))
+
+(defn drift? [{:keys [changed added removed meta-changed?]}]
+  (boolean (or (seq changed) (seq added) (seq removed) meta-changed?)))
+
+(defn reconcile-events
+  "Ledger events absorbing legacy-path drift (attributed, unsigned —
+  the signed path is the preferred writer; these keep fleet-db lossless)."
+  [ledger {:keys [changed added removed]} at]
+  (let [base (next-seq ledger)]
+    (into []
+          (map-indexed (fn [i m] (assoc m :event/seq (+ base i) :event/at at)))
+          (concat
+           (for [{:keys [name old new]} changed]
+             {:event/type :pin/reconcile-legacy :repo/name name
+              :pin/old old :pin/new new})
+           (for [e added]
+             {:event/type :repo/added-legacy :repo/name (:repo/name e)
+              :repo/revision (:repo/revision e)})
+           (for [nm removed]
+             {:event/type :repo/removed-legacy :repo/name nm})))))

@@ -66,6 +66,18 @@ nbb --classpath src:test run-tests.cljs
   quorum / sequence / parent / reachability / value-advance）。
 - 残: workspace manager（GC / checkpoint / best-of-N）と鍵の 1Password 移設。
 
+## Phase 1.5 + 3a — flip staging & signed fleet head
+
+- `fleet reconcile [--check]` — legacy 経路（gen --entry / API single-entry）の
+  west.yml 書き込みを fleet-db に **attributed ledger events** として吸収。
+  CI（superproject の `fleet-projection-verify.yml`）が main 上の drift を
+  自動吸収し、fleet-db は lossless に保たれる（hard flip までの dual-write 吸収）。
+- `fleet head [--verify]` — fleet-db 内容全体への **自己証明 signed head**
+  （sha256 content hash + monotonic sequence + parent-covering、ipns.head 型）。
+  これが Phase 3 の p2p head-announce（kotoba-lang/p2p、E2E 検証済み）が
+  フリート機間で運ぶ record になる。P3b（実 p2p 配線・複数機 seeding）は
+  JVM 側 follow-up。
+
 ## Naming
 
 `kotoba-lang/kotoba-fleet`（lease + governor-drain + fleet-view の agent
