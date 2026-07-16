@@ -66,6 +66,18 @@ nbb --classpath src:test run-tests.cljs
   quorum / sequence / parent / reachability / value-advance）。
 - 残: workspace manager（GC / checkpoint / best-of-N）と鍵の 1Password 移設。
 
+## Phase 3b — fleet head gossip (p2p)
+
+- `fleet announce --head fleet-head.edn` — P3a signed head を
+  kotoba-lang/p2p ワイヤ互換の head-announce メッセージ（`{:type
+  :head-announce :graph "fleet-db" :head-cid :seq :fleet-head}`）に。
+- `fleet receive --msg announce.edn --keys fleet-keys.edn --state s.edn`
+  — trust set（keyring roots + canonical allow）で署名検証し、seq が前進
+  する時だけ adopt（monotonic、pin と同規則）。改竄・untrusted signer・
+  downgrade は拒否。フリート機は GitHub を polling せず互いの fleet head を
+  この gossip で学ぶ（GitHub は mirror に降格）。block-chasing（kotoba-git
+  object graph 転送）は後続スライス。
+
 ## Phase 1.5 + 3a — flip staging & signed fleet head
 
 - `fleet reconcile [--check]` — legacy 経路（gen --entry / API single-entry）の
