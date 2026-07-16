@@ -1,5 +1,5 @@
 {
-  "name": "kotoba-fleet-vcs",
+  "name": "kagami",
   "description": "west-successor VCS layer (ADR-2607160005)",
   "dependencies": {
     "@noble/hashes": "2.0.1"
