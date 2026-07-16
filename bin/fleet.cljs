@@ -774,24 +774,27 @@
   nothing. --enforce: the HARD-FLIP switch — drift is a REJECTION, not an
   absorption (legacy writes forbidden; fleet-db is the sole writer). Flip
   the CI to --enforce only after every writer session is enrolled."
-  [{:keys [db west check enforce enforce-orgs]}]
-  (when-not (and db west) (die "reconcile needs --db --west [--check|--enforce] [--enforce-orgs a,b]"))
+  [{:keys [db west check enforce enforce-orgs enforce-repos]}]
+  (when-not (and db west) (die "reconcile needs --db --west [--check|--enforce] [--enforce-orgs a,b] [--enforce-repos a,b]"))
   (when-not (or check enforce) (lock-db! db))
   (let [d-old (load-db db)
         d-new (west/parse (slurp* west))
         full-diff (db/diff-dbs d-old d-new)
-        ;; staged hard flip (D): --enforce-orgs restricts the REJECTION scope
-        ;; to specific orgs (e.g. kotoba-lang public first); drift outside
-        ;; scope is still absorbed. --enforce alone = all orgs.
-        enforce-diff (if enforce-orgs
-                       (db/scope-diff full-diff d-new (set (str/split enforce-orgs #",")))
-                       full-diff)
+        ;; staged hard flip (D): tightest -> widest scope.
+        ;; --enforce-repos: only these named repos (the fleet's own signed-path
+        ;;   repos — safe first activation, breaks no legacy session).
+        ;; --enforce-orgs: repos under these orgs (e.g. kotoba-lang public).
+        ;; --enforce: all. Drift outside the scope is still absorbed.
+        enforce-diff (cond
+                       enforce-repos (db/scope-diff-repos full-diff (str/split enforce-repos #","))
+                       enforce-orgs (db/scope-diff full-diff d-new (set (str/split enforce-orgs #",")))
+                       :else full-diff)
         diff full-diff]
     (if-not (db/drift? diff)
       (println "clean: fleet-db == projection of" west)
       (let [summary {:changed (count (:changed diff)) :added (count (:added diff))
                      :removed (count (:removed diff)) :meta (:meta-changed? diff)}]
-        (when (and (or enforce enforce-orgs) (db/drift? enforce-diff))
+        (when (and (or enforce enforce-orgs enforce-repos) (db/drift? enforce-diff))
           (js/console.error "FLIP VIOLATION: west.yml written outside the signed fleet-db path"
                             (if enforce-orgs (str "(enforced orgs: " enforce-orgs ")") ""))
           (js/console.error "  in-scope drift:" (pr-str {:changed (count (:changed enforce-diff))

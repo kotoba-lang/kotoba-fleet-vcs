@@ -120,6 +120,18 @@
 (defn drift? [{:keys [changed added removed meta-changed?]}]
   (boolean (or (seq changed) (seq added) (seq removed) meta-changed?)))
 
+(defn scope-diff-repos
+  "Restrict a diff to a named set of repos (tightest staged-flip scope):
+  enforce only the fleet's own signed-path repos while everything else stays
+  in absorb mode. Safe first activation — these repos never use the legacy
+  path, so enforcing them breaks no concurrent session."
+  [diff repo-names]
+  (let [in? (set repo-names)]
+    {:changed (filterv #(in? (:name %)) (:changed diff))
+     :added   (filterv #(in? (:repo/name %)) (:added diff))
+     :removed (filterv in? (:removed diff))
+     :meta-changed? false}))
+
 (defn scope-diff
   "Restrict a diff to repos under orgs/<org>/ for a set of orgs (staged
   hard flip, D): enforce those orgs while others stay in absorb mode.
