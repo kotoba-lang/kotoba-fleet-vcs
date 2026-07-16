@@ -277,3 +277,24 @@
                                                        {:signer (did/pubkey-hex->did hexZ)
                                                         :signature (fake-sign hexZ (pin/canonical-str rec))}]}
                              qctx))))))))
+
+(deftest reconcile-drift
+  (let [d0 (west/parse fixture)
+        d1 (-> d0
+               (db/apply-pin-advance {:repo/name "plain" :pin/new "f111111111111111111111111111111111111111"})
+               (update :fleet/repos conj {:repo/name "newbie" :repo/remote "kotoba-lang"
+                                          :repo/revision "f222222222222222222222222222222222222222"
+                                          :repo/path "orgs/kotoba-lang/newbie" :repo/groups ["kotoba-lang"]})
+               (update :fleet/repos (fn [rs] (vec (remove #(= "retired" (:repo/name %)) rs)))))
+        diff (db/diff-dbs d0 d1)]
+    (is (db/drift? diff))
+    (is (= [{:name "plain" :old "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+             :new "f111111111111111111111111111111111111111"}] (:changed diff)))
+    (is (= ["newbie"] (mapv :repo/name (:added diff))))
+    (is (= ["retired"] (:removed diff)))
+    (is (not (:meta-changed? diff)))
+    (let [evs (db/reconcile-events [{:event/seq 5}] diff "2026-07-16T00:00:00Z")]
+      (is (= [6 7 8] (mapv :event/seq evs)))
+      (is (= [:pin/reconcile-legacy :repo/added-legacy :repo/removed-legacy]
+             (mapv :event/type evs))))
+    (is (not (db/drift? (db/diff-dbs d0 d0))))))

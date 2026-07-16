@@ -456,8 +456,70 @@
                          "quorum" (count (:valid-signers verdict)) "/"
                          (:threshold policy) "seq" (:pin/sequence record))))))))))
 
+;; ---------------------------------------------------------------------------
+;; Phase 1.5 reconcile + Phase 3a signed fleet head
+
+(defn cmd-reconcile
+  "Absorb legacy-path (gen --entry / API single-entry) west.yml writes into
+  fleet-db as attributed ledger events. --check: exit 1 on drift, write nothing."
+  [{:keys [db west check]}]
+  (when-not (and db west) (die "reconcile needs --db --west [--check]"))
+  (let [d-old (load-db db)
+        d-new (west/parse (slurp* west))
+        diff  (db/diff-dbs d-old d-new)]
+    (if-not (db/drift? diff)
+      (println "clean: fleet-db == projection of" west)
+      (let [summary {:changed (count (:changed diff)) :added (count (:added diff))
+                     :removed (count (:removed diff)) :meta (:meta-changed? diff)}]
+        (if check
+          (do (println "DRIFT:" (pr-str summary))
+              (doseq [c (:changed diff)] (println "  pin" (:name c) (subs (:old c) 0 8) "->" (subs (:new c) 0 8)))
+              (doseq [a (:added diff)] (println "  +" (:repo/name a)))
+              (doseq [r (:removed diff)] (println "  -" r))
+              (js/process.exit 1))
+          (let [ledgerf (str/replace db #"\.edn$" ".ledger.edn")
+                ledger  (load-ledger ledgerf)
+                evs     (db/reconcile-events ledger diff (.toISOString (js/Date.)))]
+            (doseq [ev evs] (fs/appendFileSync ledgerf (str (pr-str ev) "\n")))
+            (spit* db (pr-str d-new))
+            (println "reconciled:" (pr-str summary) "->" (count evs) "ledger event(s)")))))))
+
+(defn cmd-head
+  "Phase 3a: self-certifying signed head over the fleet-db content —
+  the record a p2p head-announce (kotoba-lang/p2p) carries between fleet
+  machines. --verify checks signature + content hash against the db file."
+  [{:keys [db key out verify]}]
+  (let [headf (or out (str/replace db #"\.edn$" ".head.edn"))
+        content-hash (node-sha256 (slurp* db))]
+    (if verify
+      (let [{:keys [record signature signer]} (reader/read-string (slurp* headf))]
+        (cond
+          (not= (:pin/value record) content-hash)
+          (do (js/console.error "HEAD MISMATCH: db content" (subs content-hash 0 12)
+                                "!= head" (subs (:pin/value record) 0 12))
+              (js/process.exit 1))
+          (not (node-verify (did/did->pubkey-hex signer) (pin/canonical-str record) signature))
+          (do (js/console.error "HEAD SIGNATURE INVALID") (js/process.exit 1))
+          :else (println "head OK: seq" (:pin/sequence record) "value"
+                         (subs content-hash 0 12) "signer" signer)))
+      (do
+        (when-not (and db key) (die "head needs --db --key [--out] | --verify"))
+        (let [pem  (slurp* key)
+              prev (when (fs/existsSync headf) (reader/read-string (slurp* headf)))
+              rec  (pin/make-record
+                    {:repo "fleet-db" :value content-hash
+                     :sequence (inc (get-in prev [:record :pin/sequence] 0))
+                     :parent (when prev (pin/record-hash node-sha256 (:record prev)
+                                                         (:signature prev)))})
+              sig  (node-sign pem (pin/canonical-str rec))
+              head {:record rec :signature sig :signer (did-of-priv pem)}]
+          (spit* headf (pr-str head))
+          (println "head announced: seq" (:pin/sequence rec) "value"
+                   (subs content-hash 0 12) "->" headf))))))
+
 (def commands
   {"import" cmd-import "check" cmd-check "stats" cmd-stats
+   "reconcile" cmd-reconcile "head" cmd-head
    "list" cmd-list "sync" cmd-sync
    "keygen" cmd-keygen
    "grant" cmd-grant
