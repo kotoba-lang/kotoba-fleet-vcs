@@ -68,6 +68,17 @@ nbb --classpath src:test run-tests.cljs
   quorum / sequence / parent / reachability / value-advance）。
 - 残: workspace manager（GC / checkpoint / best-of-N）と鍵の 1Password 移設。
 
+## live backend — kotobase commit chain 永続化（ADR-2607160005）
+
+fleet-db を EDN blob でなく **実 kotobase-peer commit chain（content-addressed・
+検証可能）**に永続化。`bin/kdb.cljs persist` が fleet-db を datom 化して
+`kb/commit!` で耐久 file-backed block store に append、chain head CID を pointer
+に記録。`hydrate` が block store だけから fleet-db を復元、`verify` が
+tamper/gapless chain 検証。実測: 1745 repos を persist→hydrate ラウンドトリップで
+name+rev set 完全一致、`verify-chain` OK。block store 本体は production では
+B2/R2（DataLad/B2 経路）。EDN の fleet-db は作業/cache 形として残り、chain が
+durable な backing になる。
+
 ## sovereign reachability（PAT を消す、ADR-2607160005）
 
 pin 検証で GitHub に触るのは到達性チェックだけだった。それを **fleet 自身の
