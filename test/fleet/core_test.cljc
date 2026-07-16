@@ -6,6 +6,7 @@
             [fleet.grant :as grant]
             [fleet.p2p]
             [fleet.ci]
+            [fleet.governor-bridge]
             [fleet.pin :as pin]
             [fleet.sync :as sync]
             [fleet.ws :as ws]
@@ -447,3 +448,20 @@
       (is (= "2026-08-01T00:00:00Z" (:exp payload))))
     (testing "exp omitted when absent"
       (is (not (contains? (grant/grant->cacao-payload (dissoc link :grant/exp)) :exp))))))
+
+(deftest governor-bridge-receipt-shape
+  (let [outcome {:repo "kagami" :new-sha "80914e06f4c1c2ef56f1b5a91e9f7e628c519e56"
+                 :seq 7 :verdict :accept :quorum 2 :threshold 2}
+        r (fleet.governor-bridge/land->ops-receipt outcome 1)]
+    (testing "fleet land-back maps to the ops-runner receipt shape"
+      (is (= "kagami:80914e06f4c1" (:merged-cid r)))
+      (is (= :fleet (:lane r)))
+      (is (= "land|kagami|seq7" (:effect-id r)))
+      (is (= :fleet/land-back (:kind r)))
+      (is (= :accepted (:status r)))
+      (is (= 1 (:ts r))))
+    (testing "reject verdict -> :rejected status"
+      (is (= :rejected (:status (fleet.governor-bridge/land->ops-receipt
+                                 (assoc outcome :verdict :reject) 1)))))
+    (testing "the signature-covered identity keys are all present"
+      (is (every? r [:merged-cid :lane :effect-id :kind :status :ts])))))
