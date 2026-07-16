@@ -1,0 +1,7 @@
+{
+  "name": "kotoba-fleet-vcs",
+  "description": "west-successor VCS layer (ADR-2607160005)",
+  "dependencies": {
+    "@noble/hashes": "2.0.1"
+  }
+}

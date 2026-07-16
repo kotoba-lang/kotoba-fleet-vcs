@@ -3,3 +3,4 @@ fleet-db.ledger.edn
 ws-*/
 node_modules/
 .nbb/
+node_modules/
