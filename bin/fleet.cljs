@@ -547,15 +547,48 @@
                          "quorum" (count (:valid-signers verdict)) "/"
                          (:threshold policy) "seq" (:pin/sequence record))))))))))
 
+(defn run-gate
+  "Run a quality gate command under a capability bound (timeout budget — the
+  kototama HostCaps analog; literal WASM confinement via the kototama Chicory
+  tender is the JVM follow-up). Produces a hinshitsu-evidence-compatible check
+  map (interop by data shape, not by require — the ops-runner decoupling
+  principle). name=cmd, cwd optional, timeout ms."
+  [gate-name cmd cwd timeout-ms]
+  (p/create
+   (fn [resolve _]
+     (let [ps (cp/spawn "bash" #js ["-lc" cmd]
+                        #js {:cwd (or cwd (js/process.cwd))
+                             :stdio #js ["ignore" "pipe" "pipe"]})
+           out (atom "") done (atom false)
+           finish (fn [status detail]
+                    (when-not @done
+                      (reset! done true)
+                      (resolve {:name (keyword (str "gate/" gate-name))
+                                :outcome status :detail detail
+                                ;; hinshitsu.evidence.v0-compatible shape
+                                :hinshitsu/status (if (= :pass status) :passed :failed)
+                                :hinshitsu/checks [gate-name]})))
+           timer (js/setTimeout
+                  (fn [] (try (.kill ps "SIGKILL") (catch :default _))
+                    (finish :fail (str "timeout after " timeout-ms "ms"))) timeout-ms)]
+       (.on (.-stdout ps) "data" #(swap! out str %))
+       (.on (.-stderr ps) "data" #(swap! out str %))
+       (.on ps "close" (fn [code] (js/clearTimeout timer)
+                         (finish (if (zero? code) :pass :fail)
+                                 (str "exit " code))))
+       (.on ps "error" (fn [e] (js/clearTimeout timer) (finish :fail (str e))))))))
+
 (defn cmd-ci-verify
   "Native CI (ADR-2607160005): run pin-reachability checks over the named
-  repos and emit a signed, content-addressed verification receipt (fleet.ci,
-  modelled on kotobase code_graph execution-receipt: verdict = required ⊆
-  passed). Appended to an append-only receipt log (--out, default
+  repos — and optional quality GATES (--gate 'name=cmd', capability-bounded
+  by --gate-timeout) — then emit a signed, content-addressed verification
+  receipt (fleet.ci, modelled on kotobase code_graph execution-receipt:
+  verdict = required ⊆ passed). Gates produce hinshitsu-evidence-compatible
+  checks. Appended to an append-only receipt log (--out, default
   fleet-ci.edn). Follows the cloud-itonami ops-runner pattern (verify ->
   signed receipt). Exit 1 if the receipt verdict is :fail."
-  [{:keys [db repos key kagi out required] :as opts}]
-  (when-not (and db repos (or key kagi)) (die "ci-verify needs --db --repos (--key|--kagi) [--out] [--required a,b]"))
+  [{:keys [db repos key kagi out required gate gate-cwd gate-timeout] :as opts}]
+  (when-not (and db repos (or key kagi)) (die "ci-verify needs --db --repos (--key|--kagi) [--out] [--required a,b] [--gate 'name=cmd']"))
   (let [d (load-db db)
         names (str/split repos #",")
         pem (read-key opts)
@@ -564,13 +597,19 @@
         prev (when (fs/existsSync outf)
                (last (mapv reader/read-string (remove str/blank? (str/split (slurp* outf) #"\n")))))]
     (-> (p/all
-         (for [nm names]
-           (let [e (west/find-repo d nm)]
-             (if-not e (p/resolved {:name (keyword (str "pin-reachable/" nm)) :outcome :fail :detail :unknown-repo})
-                 (p/let [r (gh-reachable? (org-repo-of d e) (:repo/revision e))]
-                   {:name (keyword (str "pin-reachable/" nm))
-                    :outcome (if (= true r) :pass (if (= :unknown r) :pass :fail))
-                    :detail (str r)})))))
+         (concat
+          (for [nm names]
+            (let [e (west/find-repo d nm)]
+              (if-not e (p/resolved {:name (keyword (str "pin-reachable/" nm)) :outcome :fail :detail :unknown-repo})
+                  (p/let [r (gh-reachable? (org-repo-of d e) (:repo/revision e))]
+                    {:name (keyword (str "pin-reachable/" nm))
+                     :outcome (if (= true r) :pass (if (= :unknown r) :pass :fail))
+                     :detail (str r)}))))
+          ;; optional quality gates (hinshitsu-shaped), capability-bounded
+          (when gate
+            (for [spec (str/split gate #";;")]
+              (let [[gname gcmd] (str/split spec #"=" 2)]
+                (run-gate gname gcmd gate-cwd (js/parseInt (or gate-timeout "120000"))))))))
         (p/then
          (fn [checks]
            (let [req (if required (set (map keyword (str/split required #",")))

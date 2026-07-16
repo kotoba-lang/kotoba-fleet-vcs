@@ -81,7 +81,13 @@ nbb --classpath src:test run-tests.cljs
   チェックを走らせ署名 receipt を append-only ログに記録、verdict :fail で
   exit 1。receipt は IStore stream（`fleet/ci-receipts`）にも載せられる
   （delta.store と同じ substrate）。private repo も owner 認証で検証済み。
-- 残: kototama capability-sandbox での hinshitsu ゲート実行（現状は pin 到達性
+- `fleet ci-verify --gate ''name=cmd'' [--gate-timeout ms]`: 品質ゲートを
+  **capability-bound（timeout budget = kototama HostCaps の analog）**で実行し、
+  hinshitsu-evidence 互換の check（`{:hinshitsu/status :hinshitsu/checks}`、
+  ops-runner の plain-map 疎結合原則）を署名 receipt に食わせる。実測: repo の
+  テストスイートを gate に走らせ pass、`exit 3` の gate は receipt :fail + exit 1。
+- 残: kototama Chicory tender での **literal WASM 封じ**（現状は timeout-bound
+  subprocess）と hinshitsu.mokushi（visual diff）ゲート。（旧: pin 到達性
   チェックのみ。hinshitsu evidence schema と互換の {:name :outcome} 形）。
 
 ## 日常ドライバ化（reverse-topo: C→B→A→D）
