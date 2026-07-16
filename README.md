@@ -39,6 +39,9 @@ nbb --classpath src bin/fleet.cljs pin-advance --db fleet-db.edn --repo kotoba -
 
 ## Tests
 
+（agent 提案の実例: この節見出し直下の一行は governed land-back の dogfood で追加された）
+
+
 ```bash
 nbb --classpath src:test run-tests.cljs
 ```
