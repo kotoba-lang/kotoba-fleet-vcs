@@ -1,4 +1,4 @@
-# kotoba-fleet
+# kotoba-fleet-vcs
 
 west 後継の AI-agent フリート向け VCS レイヤ（ADR-2607160005）。この repo は
 **Phase 0 — 読み取りモデル**: `manifest/west.yml`（生成物）を fleet-db（EDN の
@@ -54,7 +54,16 @@ nbb --classpath src:test run-tests.cljs
   canvas-ledger.edn と同型）。admission gate（署名・単調 sequence・上流到達性）
   は Phase 1。
 
+## Naming
+
+`kotoba-lang/kotoba-fleet`（lease + governor-drain + fleet-view の agent
+並行実行コーディネーション基盤、ADR-2606302000）とは**別レイヤの兄弟 repo**。
+あちらは「複数 agent の実行をぶつけない」係、この repo は「repo 群の
+manifest / pin / sync（west 後継 VCS プレーン）」係。短名が取られているため
+role suffix `-vcs` を付けた（repo naming 規約 ADR-2607102200 addendum 14）。
+
 ## Roadmap
 
 ADR-2607160005 の Phase 1（signed pins / admission gate）→ Phase 2（agent
-identity + governed land-back）→ Phase 3（kotoba-git object plane + p2p）。
+identity + governed land-back、既存 kotoba-fleet の governor との統合検討）
+→ Phase 3（kotoba-git object plane + p2p）。
