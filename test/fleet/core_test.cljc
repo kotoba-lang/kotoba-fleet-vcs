@@ -420,3 +420,17 @@
       (let [lie (assoc-in signed [:receipt :ci/outcome] :pass)
             lie (assoc-in lie [:receipt :ci/checks] [{:name :pin-reachable/a :outcome :fail}])]
         (is (not (:ok? (fleet.ci/verify-receipt h vfy lie "pkA"))))))))
+
+(deftest scope-diff-repos-tightest-flip
+  (let [d0 (west/parse fixture)
+        d1 (-> d0
+               (db/apply-pin-advance {:repo/name "plain" :pin/new "f111111111111111111111111111111111111111"})
+               (db/apply-pin-advance {:repo/name "annexed" :pin/new "f222222222222222222222222222222222222222"}))
+        full (db/diff-dbs d0 d1)]
+    (testing "enforce-repos scopes rejection to named repos only"
+      (is (= ["plain"] (map :name (:changed (db/scope-diff-repos full ["plain"])))))
+      (is (db/drift? (db/scope-diff-repos full ["plain"]))))
+    (testing "untouched repo scope -> no in-scope drift"
+      (is (not (db/drift? (db/scope-diff-repos full ["heavy-sub"])))))
+    (testing "both repos in scope"
+      (is (= 2 (count (:changed (db/scope-diff-repos full ["plain" "annexed"]))))))))
