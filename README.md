@@ -66,6 +66,20 @@ nbb --classpath src:test run-tests.cljs
   quorum / sequence / parent / reachability / value-advance）。
 - 残: workspace manager（GC / checkpoint / best-of-N）と鍵の 1Password 移設。
 
+## ⑯ kotobase persistence (datom plane + Datalog)
+
+- `fleet.kdb`: fleet-db EDN read-model を **実 datom plane**（kotobase-peer
+  over arrangement/chain/prolly-tree）に射影。plain-fn クエリを **Datalog**
+  （`kb/query`）に置換、~500KB EDN blob を **content-addressed commit chain**
+  （`kb/commit!` → CID）で永続化。EDN は ingest/transport 形として残す。
+- contract test（`kdb-contract.cljs`）が datom-plane クエリ == EDN-model
+  クエリを実証（kotoba-lang 1389 / cloud-itonami 58 / heavy 17 / datalad 10 /
+  revision / count 全一致）+ 永続化ラウンドトリップ（transact→commit!→hydrate）。
+- 実行 classpath（kotobase stack、全て pure cljc + @noble/hashes）:
+  `kotobase-peer/src:arrangement/src:chain/src:datom/src:prolly-tree/src:
+  io-ipld/src:io-multiformats/src:org-ietf-cbor/src`。cljs では commit!/
+  hydrate が Promise を返す（caller が await）。
+
 ## Phase ⑥ — per-agent identity (hard-flip prerequisite)
 
 - `fleet enroll --agent NAME --grant PATH --registry fleet-agents.edn` —
