@@ -23,6 +23,7 @@
             [fleet.did :as did]
             [fleet.grant :as grant]
             [fleet.pin :as pin]
+            [fleet.p2p]
             [fleet.sync :as sync]
             [fleet.west :as west]
             [fleet.ws :as ws]
@@ -624,9 +625,47 @@
           (println "head announced: seq" (:pin/sequence rec) "value"
                    (subs content-hash 0 12) "->" headf))))))
 
+;; ---------------------------------------------------------------------------
+;; Phase 3b: fleet head gossip (wire-compatible with kotoba-lang/p2p)
+
+(defn cmd-announce
+  "Emit the current signed fleet head as a p2p head-announce message (EDN)
+  to --out (default stdout). This is what a fleet machine gossips."
+  [{:keys [head out node]}]
+  (when-not head (die "announce needs --head <fleet-head.edn> [--node ID] [--out msg.edn]"))
+  (let [h (reader/read-string (slurp* head))
+        msg (fleet.p2p/head->announce h (or node "this-machine"))]
+    (if out (do (spit* out (pr-str msg)) (println "announce ->" out
+                                                   "seq" (:seq msg) "cid" (subs (:head-cid msg) 0 12)))
+        (println (pr-str msg)))))
+
+(defn cmd-receive
+  "Verify a received p2p announce against the fleet trust set (keyring
+  roots + canonical allow) and adopt it if it advances. --state persists
+  the adopted head across calls (a machine's known fleet-db head)."
+  [{:keys [msg keys state]}]
+  (when-not (and msg keys) (die "receive needs --msg <announce.edn> --keys <fleet-keys.edn> [--state s.edn]"))
+  (let [announce (reader/read-string (slurp* msg))
+        cfg (reader/read-string (slurp* keys))
+        trust (into (or (:roots cfg) #{}) (get-in cfg [:canonical :allow]))
+        ctx {:trust trust :verify-fn node-verify
+             :did->pubkey #(did/did->pubkey-hex %)}
+        node0 (if (and state (fs/existsSync state))
+                (reader/read-string (slurp* state)) (fleet.p2p/new-node "this-machine"))
+        v (fleet.p2p/verify-announce announce ctx)
+        node1 (fleet.p2p/adopt node0 announce ctx)]
+    (if (:ok? v)
+      (let [h (fleet.p2p/local-head node1)]
+        (when state (spit* state (pr-str node1)))
+        (println "adopted: seq" (:seq h) "cid" (subs (:head-cid h) 0 12)
+                 (if (= (:seq h) (:seq announce)) "(advanced)" "(kept newer local)")))
+      (do (js/console.error "REJECTED announce:" (pr-str (:reasons v)))
+          (js/process.exit 1)))))
+
 (def commands
   {"import" cmd-import "check" cmd-check "stats" cmd-stats
    "reconcile" cmd-reconcile "head" cmd-head
+   "announce" cmd-announce "receive" cmd-receive
    "ws-gc" cmd-ws-gc "checkpoint" cmd-checkpoint
    "list" cmd-list "sync" cmd-sync
    "keygen" cmd-keygen

@@ -4,6 +4,7 @@
             [fleet.db :as db]
             [fleet.did :as did]
             [fleet.grant :as grant]
+            [fleet.p2p]
             [fleet.pin :as pin]
             [fleet.sync :as sync]
             [fleet.ws :as ws]
@@ -313,3 +314,48 @@
         (is (= ["c"] skipped-dirty))))
     (testing "no caps -> keep all clean"
       (is (empty? (:remove (ws/gc-plan wss {})))))))
+
+;; ---------------------------------------------------------------------------
+;; Phase 3b: fleet head gossip replication (wire-compatible with p2p)
+
+(defn- signed-head [pubkey seq value]
+  (let [rec (pin/make-record {:repo "fleet-db" :value value :sequence seq :parent nil})]
+    {:record rec
+     :signature (fake-sign pubkey (pin/canonical-str rec))
+     :signer (str "did:key:" pubkey)}))
+
+(deftest p2p-fleet-head-replication
+  (let [trust #{"did:key:pkOwner"}
+        ctx {:trust trust :verify-fn fake-verify
+             :did->pubkey #(subs % (count "did:key:"))}
+        head5 (signed-head "pkOwner" 5 "content-hash-5")
+        ann5  (fleet.p2p/head->announce head5 "machineA")]
+    (testing "announce shape is p2p-wire-compatible"
+      (is (= :head-announce (:type ann5)))
+      (is (= "fleet-db" (:graph ann5)))
+      (is (= 5 (:seq ann5)))
+      (is (= "content-hash-5" (:head-cid ann5))))
+    (testing "trusted signed announce verifies"
+      (is (:ok? (fleet.p2p/verify-announce ann5 ctx))))
+    (testing "machine B with no head adopts A's head"
+      (let [b (fleet.p2p/adopt (fleet.p2p/new-node "machineB") ann5 ctx)]
+        (is (= 5 (:seq (fleet.p2p/local-head b))))
+        (is (= "content-hash-5" (:head-cid (fleet.p2p/local-head b))))))
+    (testing "stale announce (lower seq) is ignored"
+      (let [b (-> (fleet.p2p/new-node "machineB")
+                  (fleet.p2p/adopt ann5 ctx)
+                  (fleet.p2p/adopt (fleet.p2p/head->announce
+                                    (signed-head "pkOwner" 3 "old") "machineA") ctx))]
+        (is (= 5 (:seq (fleet.p2p/local-head b))))))
+    (testing "untrusted signer rejected + not adopted"
+      (let [ann (fleet.p2p/head->announce (signed-head "pkEvil" 9 "evil") "machineX")]
+        (is (some #{:untrusted-signer} (:reasons (fleet.p2p/verify-announce ann ctx))))
+        (is (= 5 (:seq (fleet.p2p/local-head
+                        (fleet.p2p/adopt (fleet.p2p/adopt (fleet.p2p/new-node "b") ann5 ctx)
+                                         ann ctx)))))))
+    (testing "tampered head-cid rejected"
+      (let [ann (assoc ann5 :head-cid "swapped")]
+        (is (some #{:head-cid-mismatch} (:reasons (fleet.p2p/verify-announce ann ctx))))))
+    (testing "forged signature rejected"
+      (let [bad (assoc-in ann5 [:fleet-head :signature] "deadbeef")]
+        (is (some #{:bad-signature} (:reasons (fleet.p2p/verify-announce bad ctx))))))))
