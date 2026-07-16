@@ -617,10 +617,13 @@
 
 (defn cmd-reconcile
   "Absorb legacy-path (gen --entry / API single-entry) west.yml writes into
-  fleet-db as attributed ledger events. --check: exit 1 on drift, write nothing."
-  [{:keys [db west check]}]
-  (when-not (and db west) (die "reconcile needs --db --west [--check]"))
-  (when-not check (lock-db! db))
+  fleet-db as attributed ledger events. --check: exit 1 on drift, write
+  nothing. --enforce: the HARD-FLIP switch — drift is a REJECTION, not an
+  absorption (legacy writes forbidden; fleet-db is the sole writer). Flip
+  the CI to --enforce only after every writer session is enrolled."
+  [{:keys [db west check enforce]}]
+  (when-not (and db west) (die "reconcile needs --db --west [--check|--enforce]"))
+  (when-not (or check enforce) (lock-db! db))
   (let [d-old (load-db db)
         d-new (west/parse (slurp* west))
         diff  (db/diff-dbs d-old d-new)]
@@ -628,6 +631,12 @@
       (println "clean: fleet-db == projection of" west)
       (let [summary {:changed (count (:changed diff)) :added (count (:added diff))
                      :removed (count (:removed diff)) :meta (:meta-changed? diff)}]
+        (when enforce
+          (js/console.error "FLIP VIOLATION: west.yml was written outside the signed fleet-db path")
+          (js/console.error "  drift:" (pr-str summary))
+          (doseq [c (:changed diff)] (js/console.error "  pin" (:name c) "changed via legacy path"))
+          (js/console.error "  advance pins with `fleet pin-advance` (signed), not gen --entry")
+          (js/process.exit 1))
         (if check
           (do (println "DRIFT:" (pr-str summary))
               (doseq [c (:changed diff)] (println "  pin" (:name c) (subs (:old c) 0 8) "->" (subs (:new c) 0 8)))
